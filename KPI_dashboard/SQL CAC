@@ -1,0 +1,115 @@
+My thought process of calculating the Customer Acquisition Cost 
+I would like the data to be grouped by:
+Month
+platform channel
+product category (if possible)
+customer cohort (registered vs non registered)
+
+**Initial Query**
+notes:
+1) checked all adplatforms for NULL values, meta_cost was the only adplatform that had returned. COALESCE(meta_cost,0) to adjust for null values so that aggregate functions would still work
+2) this query GROUPs BY: Month, Channel and Customer Cohort 
+
+WITH adplatform_cost AS (
+SELECT
+  DATE_TRUNC(date, MONTH) AS month, 
+  SUM(google_cost) AS google_cost, 
+  SUM(meta_cost) AS meta_cost, 
+  SUM(rtbhouse_cost) AS rtbhouse_cost, 
+  ROUND(SUM(google_cost + COALESCE(meta_cost, 0) + rtbhouse_cost),2) AS total_adplatform_cost
+FROM `prism-acquire.prism_acquire.adplatform_data`
+WHERE date >='2022-01-01' AND date <'2024-01-01'
+GROUP BY month
+),
+new_customer AS (
+  SELECT 
+    DATE_TRUNC(date, MONTH) AS month,
+    COUNT(transaction_id) AS new_customer
+  FROM `prism-acquire.prism_acquire.transactions`
+  WHERE date >= '2022-01-01' AND date < '2024-01-01'
+  GROUP BY month
+)
+SELECT 
+  adplatform_cost.month,
+  adplatform_cost.google_cost,
+  adplatform_cost.meta_cost,
+  adplatform_cost.rtbhouse_cost,
+  adplatform_cost.total_adplatform_cost,
+  new_customer.new_customer,
+  ROUND((adplatform_cost.total_adplatform_cost / NULLIF(new_customer.new_customer, 0)), 2) AS total_CAC
+FROM adplatform_cost
+LEFT JOIN new_customer 
+  ON adplatform_cost.month = new_customer.month
+ORDER BY adplatform_cost.month ASC;
+
+
+
+
+
+
+**Adjusted the query to show registered/ non registered users per month - FINAL QUERY**
+Notes: 
+1) Using MAX() at the final query to safely pull the single value per month. 
+
+WITH adplatform_cost AS (  
+  SELECT 
+    DATE_TRUNC(date, MONTH) AS month,
+    SUM(google_cost) AS google_cost,
+    SUM(meta_cost) AS meta_cost,
+    SUM(rtbhouse_cost) AS rtbhouse_cost,
+    ROUND(SUM(google_cost + COALESCE(meta_cost, 0) + rtbhouse_cost), 2) AS total_adplatform_cost
+  FROM `prism-acquire.prism_acquire.adplatform_data`
+  WHERE date >= '2022-01-01' AND date < '2024-01-01'
+  GROUP BY month
+),
+
+new_customer AS (
+  SELECT 
+    DATE_TRUNC(date, MONTH) AS month,
+    COUNT(transaction_id) AS new_customer
+  FROM `prism-acquire.prism_acquire.transactions`
+  WHERE date >= '2022-01-01' AND date < '2024-01-01'
+  GROUP BY month
+),
+
+registration_status AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    CASE 
+      WHEN u.user_crm_id IS NULL THEN 'Non-Registered'
+      ELSE 'Registered'
+    END AS user_status,
+    COUNT(t.transaction_id) AS customer_count
+  FROM `prism-acquire.prism_acquire.transactions` t
+  LEFT JOIN `prism-acquire.prism_acquire.users` u
+    ON t.user_crm_id = u.user_crm_id
+  WHERE t.date >= '2022-01-01' AND t.date < '2024-01-01'
+  GROUP BY month, user_status
+)
+
+SELECT 
+  adplatform_cost.month,
+  adplatform_cost.google_cost,
+  adplatform_cost.meta_cost,
+  adplatform_cost.rtbhouse_cost,
+  adplatform_cost.total_adplatform_cost,
+  MAX(new_customer.new_customer) AS new_customer,
+  ROUND((adplatform_cost.total_adplatform_cost / NULLIF(MAX(new_customer.new_customer), 0)), 2) AS total_CAC,
+
+  -- Registered / Non-Registered user breakdown
+  MAX(CASE WHEN r.user_status = 'Registered' THEN r.customer_count ELSE 0 END) AS registered_customers,
+  MAX(CASE WHEN r.user_status = 'Non-Registered' THEN r.customer_count ELSE 0 END) AS non_registered_customers
+
+FROM adplatform_cost
+LEFT JOIN new_customer 
+  ON adplatform_cost.month = new_customer.month
+LEFT JOIN registration_status r
+  ON adplatform_cost.month = r.month
+GROUP BY 
+  adplatform_cost.month,
+  adplatform_cost.google_cost,
+  adplatform_cost.meta_cost,
+  adplatform_cost.rtbhouse_cost,
+  adplatform_cost.total_adplatform_cost
+ORDER BY adplatform_cost.month ASC;
+
