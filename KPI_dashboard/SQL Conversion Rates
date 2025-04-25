@@ -1,0 +1,192 @@
+**Initial Query**
+
+
+WITH click AS (
+SELECT 
+DATE_TRUNC(date, MONTH) AS month,
+SUM(google_clicks) AS google_clicks,
+SUM(COALESCE(meta_clicks, 0)) AS meta_clicks,
+SUM(rtbhouse_clicks) AS rtbhouse_clicks,
+SUM(google_clicks + COALESCE(meta_clicks, 0) + rtbhouse_clicks) AS total_clicks
+FROM `prism-acquire.prism_acquire.adplatform_data` 
+WHERE date BETWEEN '2022-01-01' AND '2024-01-01'
+GROUP BY month
+),
+o AS (
+SELECT
+DATE_TRUNC(date, MONTH) AS month,
+COUNT(transaction_id) AS total_order,
+SUM(transaction_revenue) AS total_revenue,
+ROUND(SUM(transaction_revenue) / NULLIF(COUNT(transaction_id), 0), 2) AS AOV
+FROM `prism-acquire.prism_acquire.transactions`
+WHERE date >= '2022-01-01' AND date < '2024-01-01'
+GROUP BY month
+)
+SELECT 
+click.month,
+click.total_clicks,
+o.total_order,
+ROUND((o.total_order / NULLIF(click.total_clicks, 0)) * 100, 2) AS overall_conversion_rate,
+
+-- Platform-specific conversion rates
+ROUND((o.total_order / NULLIF(click.google_clicks, 0)) * 100, 2) AS google_conversion_rate,
+ROUND((o.total_order / NULLIF(click.meta_clicks, 0)) * 100, 2) AS meta_conversion_rate,
+ROUND((o.total_order / NULLIF(click.rtbhouse_clicks, 0)) * 100, 2) AS rtbhouse_conversion_rate
+
+FROM click
+LEFT JOIN o ON click.month = o.month
+ORDER BY click.month;
+
+**Adjusted to add a column to separate which users were registered/ non registered**
+
+
+WITH click AS (
+  SELECT 
+    DATE_TRUNC(date, MONTH) AS month,
+    SUM(google_clicks) AS google_clicks,
+    SUM(COALESCE(meta_clicks, 0)) AS meta_clicks,
+    SUM(rtbhouse_clicks) AS rtbhouse_clicks,
+    SUM(google_clicks + COALESCE(meta_clicks, 0) + rtbhouse_clicks) AS total_clicks
+  FROM `prism-acquire.prism_acquire.adplatform_data` 
+  WHERE date BETWEEN '2022-01-01' AND '2024-01-01'
+  GROUP BY month
+),
+
+o AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    COUNT(t.transaction_id) AS total_order,
+    SUM(t.transaction_revenue) AS total_revenue,
+    ROUND(SUM(t.transaction_revenue) / NULLIF(COUNT(t.transaction_id), 0), 2) AS AOV
+  FROM `prism-acquire.prism_acquire.transactions` t
+  WHERE t.date >= '2022-01-01' AND t.date < '2024-01-01'
+  GROUP BY month
+),
+
+registration_status AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    CASE WHEN u.user_crm_id IS NULL THEN 'Non-Registered' ELSE 'Registered' END AS user_status,
+    COUNT(t.transaction_id) AS order_count
+  FROM `prism-acquire.prism_acquire.transactions` t
+  LEFT JOIN `prism-acquire.prism_acquire.users` u
+    ON t.user_crm_id = u.user_crm_id
+  WHERE t.date >= '2022-01-01' AND t.date < '2024-01-01'
+  GROUP BY month, user_status
+)
+
+SELECT 
+  click.month,
+  click.total_clicks,
+  o.total_order,
+  ROUND((o.total_order / NULLIF(click.total_clicks, 0)) * 100, 2) AS overall_conversion_rate,
+
+  -- Platform-specific conversion rates
+  ROUND((o.total_order / NULLIF(click.google_clicks, 0)) * 100, 2) AS google_conversion_rate,
+  ROUND((o.total_order / NULLIF(click.meta_clicks, 0)) * 100, 2) AS meta_conversion_rate,
+  ROUND((o.total_order / NULLIF(click.rtbhouse_clicks, 0)) * 100, 2) AS rtbhouse_conversion_rate,
+
+  -- Registered/Non-registered breakdown
+  MAX(CASE WHEN r.user_status = 'Registered' THEN r.order_count ELSE 0 END) AS registered_order_count,
+  MAX(CASE WHEN r.user_status = 'Non-Registered' THEN r.order_count ELSE 0 END) AS non_registered_order_count
+
+FROM click
+LEFT JOIN o ON click.month = o.month
+LEFT JOIN registration_status r ON click.month = r.month
+GROUP BY click.month, click.total_clicks, o.total_order, click.google_clicks, click.meta_clicks, click.rtbhouse_clicks
+ORDER BY click.month;
+
+
+
+
+**Adjusted to show registered/non-registered as a %, and include product category related per month**
+Notes: 
+The query below is now grouping by: Month, adplatform channel, product category and customer cohort
+
+
+
+-- Click data by month
+WITH click AS (
+  SELECT 
+    DATE_TRUNC(date, MONTH) AS month,
+    SUM(google_clicks) AS google_clicks,
+    SUM(COALESCE(meta_clicks, 0)) AS meta_clicks,
+    SUM(rtbhouse_clicks) AS rtbhouse_clicks,
+    SUM(google_clicks + COALESCE(meta_clicks, 0) + rtbhouse_clicks) AS total_clicks
+  FROM `prism-acquire.prism_acquire.adplatform_data` 
+  WHERE date BETWEEN '2022-01-01' AND '2024-01-01'
+  GROUP BY month
+),
+
+-- Orders by month
+o AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    COUNT(t.transaction_id) AS total_order,
+    SUM(t.transaction_revenue) AS total_revenue,
+    ROUND(SUM(t.transaction_revenue) / NULLIF(COUNT(t.transaction_id), 0), 2) AS AOV
+  FROM `prism-acquire.prism_acquire.transactions` t
+  WHERE t.date >= '2022-01-01' AND t.date < '2024-01-01'
+  GROUP BY month
+),
+
+-- Registered vs Non-Registered orders by month
+registration_status AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    CASE WHEN u.user_crm_id IS NULL THEN 'Non-Registered' ELSE 'Registered' END AS user_status,
+    COUNT(t.transaction_id) AS order_count
+  FROM `prism-acquire.prism_acquire.transactions` t
+  LEFT JOIN `prism-acquire.prism_acquire.users` u
+    ON t.user_crm_id = u.user_crm_id
+  WHERE t.date >= '2022-01-01' AND t.date < '2024-01-01'
+  GROUP BY month, user_status
+),
+
+-- Aggregated registered breakdown
+registration_pivot AS (
+  SELECT
+    month,
+    SUM(CASE WHEN user_status = 'Registered' THEN order_count ELSE 0 END) AS registered_order_count,
+    SUM(CASE WHEN user_status = 'Non-Registered' THEN order_count ELSE 0 END) AS non_registered_order_count
+  FROM registration_status
+  GROUP BY month
+),
+
+-- Main category item quantities per month
+category_breakdown AS (
+  SELECT
+    DATE_TRUNC(t.date, MONTH) AS month,
+    p.item_main_category,
+    SUM(t.item_quantity) AS items_sold
+  FROM `prism-acquire.prism_acquire.transactionsanditems` t
+  LEFT JOIN `prism-acquire.prism_acquire.productattributes` p
+    ON t.item_id = p.item_id
+  WHERE t.date BETWEEN '2022-01-01' AND '2024-01-01'
+  GROUP BY month, p.item_main_category
+)
+
+-- Final SELECT combines all
+SELECT 
+  click.month,
+  o.total_order,
+  click.total_clicks,
+  ROUND((o.total_order / NULLIF(click.total_clicks, 0)) * 100, 2) AS overall_conversion_rate,
+
+  ROUND((o.total_order / NULLIF(click.google_clicks, 0)) * 100, 2) AS google_conversion_rate,
+  ROUND((o.total_order / NULLIF(click.meta_clicks, 0)) * 100, 2) AS meta_conversion_rate,
+  ROUND((o.total_order / NULLIF(click.rtbhouse_clicks, 0)) * 100, 2) AS rtbhouse_conversion_rate,
+
+  rp.registered_order_count,
+  rp.non_registered_order_count,
+  ROUND((rp.registered_order_count / NULLIF(o.total_order, 0)) * 100, 2) AS registered_order_pct,
+  ROUND((rp.non_registered_order_count / NULLIF(o.total_order, 0)) * 100, 2) AS non_registered_order_pct,
+
+  cb.item_main_category,
+  cb.items_sold
+
+FROM click
+LEFT JOIN o ON click.month = o.month
+LEFT JOIN registration_pivot rp ON click.month = rp.month
+LEFT JOIN category_breakdown cb ON click.month = cb.month
+ORDER BY click.month, cb.items_sold DESC;
