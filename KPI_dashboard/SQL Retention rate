@@ -1,0 +1,70 @@
+**Initial query**
+WITH FirstTxn AS (
+  SELECT
+    user_cookie_id,
+    MIN(date) AS first_txn_date
+  FROM `prism-acquire.prism_acquire.transactions`
+  GROUP BY user_cookie_id
+),
+
+-- Users active in the PREVIOUS month (used for BOM)
+CustomersBOM AS (
+  SELECT DISTINCT
+    user_cookie_id,
+    DATE(EXTRACT(YEAR FROM DATE_ADD(date, INTERVAL 1 MONTH)), EXTRACT(MONTH FROM DATE_ADD(date, INTERVAL 1 MONTH)), 1) AS txn_month
+  FROM `prism-acquire.prism_acquire.transactions`
+),
+
+-- Users active in the CURRENT month (used for EOM)
+CustomersEOM AS (
+  SELECT DISTINCT
+    user_cookie_id,
+    DATE(EXTRACT(YEAR FROM date), EXTRACT(MONTH FROM date), 1) AS txn_month
+  FROM `prism-acquire.prism_acquire.transactions`
+)
+
+SELECT
+  DATE(EXTRACT(YEAR FROM t.date), EXTRACT(MONTH FROM t.date), 1) AS txn_month,
+  
+  COUNT(DISTINCT t.user_cookie_id) AS distinct_user_count,
+
+  COUNT(DISTINCT bom.user_cookie_id) AS BOM_user_count,
+  
+  COUNT(DISTINCT eom.user_cookie_id) AS EOM_user_count,
+
+  COUNT(DISTINCT 
+    CASE
+      WHEN DATE(EXTRACT(YEAR FROM ft.first_txn_date), EXTRACT(MONTH FROM ft.first_txn_date), 1) 
+        = DATE(EXTRACT(YEAR FROM t.date), EXTRACT(MONTH FROM t.date), 1)
+      THEN t.user_cookie_id
+    END) AS new_user_count,
+
+  CASE 
+    WHEN COUNT(DISTINCT bom.user_cookie_id) > 0 THEN
+      SAFE_DIVIDE(
+        COUNT(DISTINCT eom.user_cookie_id) 
+        - COUNT(DISTINCT CASE
+            WHEN DATE(EXTRACT(YEAR FROM ft.first_txn_date), EXTRACT(MONTH FROM ft.first_txn_date), 1) 
+              = DATE(EXTRACT(YEAR FROM t.date), EXTRACT(MONTH FROM t.date), 1)
+            THEN t.user_cookie_id
+          END),
+        COUNT(DISTINCT bom.user_cookie_id)
+      )
+    ELSE NULL
+  END AS retention_rate
+
+FROM `prism-acquire.prism_acquire.transactions` AS t
+
+LEFT JOIN FirstTxn AS ft
+  ON t.user_cookie_id = ft.user_cookie_id
+
+LEFT JOIN CustomersBOM AS bom
+  ON t.user_cookie_id = bom.user_cookie_id
+  AND DATE(EXTRACT(YEAR FROM t.date), EXTRACT(MONTH FROM t.date), 1) = bom.txn_month
+
+LEFT JOIN CustomersEOM AS eom
+  ON t.user_cookie_id = eom.user_cookie_id
+  AND DATE(EXTRACT(YEAR FROM t.date), EXTRACT(MONTH FROM t.date), 1) = eom.txn_month
+
+GROUP BY txn_month
+ORDER BY txn_month DESC;
