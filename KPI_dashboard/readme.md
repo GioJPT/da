@@ -1,5 +1,3 @@
-**Context**
-
 **Tools Used:** SQL, Power BI, Excel
 
 **Context**
